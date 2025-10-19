@@ -21,7 +21,7 @@ The project aims to deliver a resilient, cloud-native ELT pipeline with:
 
 ### Architecture
 
-![Data Pipeline Architecture](Data_pipeline_Archit.png)
+![Data Pipeline Architecture](eltarchitecture.png)
 
 API  →  Airflow (Extract)  →  Azure Blob Storage  →  Azure Data Factory[ADF (Load + Orchestrate)]  →  Azure PostgreSQL (Transform in SQL) →  Power BI
 
@@ -47,17 +47,16 @@ API  →  Airflow (Extract)  →  Azure Blob Storage  →  Azure Data Factory[AD
  |
  ├─ airflow_dags/nyc_311_to_blob.py # hits the open NYC 311 endpoint (example) and writes the JSON to Blob in azure
  └─ sql/
-    ├─ stg/api_311_raw.sql      # SQL scripts for transformations - creates a staging table to hold jsonb payloads
-    |   ├─ sample_insert.sql               
+    ├─ stg/api_311_raw.sql , sample_insert.sql     # SQL scripts for loading from azure - creates a staging table to hold jsonb payloads
     │   └─ data/sample_311.json
-    └─ dwh/run_311_transform.sql    # reads recent staging rows, flattens JSON into columns,upserts by request_id.
+    └─ dwh/schema.sql, transform_load.sql    # reads recent staging rows, flattens JSON into columns,upserts by request_id.
 ```
 
-### Infrastructure with Terraform
+## Infrastructure with Terraform
 
 - ***install Terraform and Azure CLI first.***
 
-### Infrastructure Resources/ Modules
+A.) Infrastructure Resources/ Modules
 
 - **Resources:** [Terraform Registry](https://registry.terraform.io)
 - Create and activate a virtual env: python -m venv .venv
@@ -68,7 +67,7 @@ API  →  Airflow (Extract)  →  Azure Blob Storage  →  Azure Data Factory[AD
         - Azure PostgreSQL Flexible Server
         - Azure Data Factory
 
-### Install tools
+B.) Install tools
 
 ```bash
 # Install Azure CLI
@@ -87,15 +86,52 @@ az account show
 
 ```
 
-### Terraform configuration files
+C.) Terraform configuration files
 
-Create a terraform/ folder like above
+- Create a terraform/ folder like above
 
 ## Usage - How to run (ground up)
 
-### Install: Terraform ≥ 1.6, Azure CLI ≥ 2.58 at project root
+### Deploy Azure and services with Terraform: Initialize + apply in project_root or project_root/terraform
 
-- Login + select subscription:
+#### In project root (Auto)
+
+```bash
+# from project root
+chmod +x tf_run.sh
+
+# Normal plan/apply (with outputs printed at the end):
+./tf_run.sh
+
+# Create a fresh backend with a new storage account and auto-write backend.hcl:
+CREATE_BACKEND=true WRITE_BACKEND=true ./tf_run.sh
+
+# to redeploy 
+RESET=true DO_DESTROY=true NUKE_RG="" CCREATE_BACKEND=true WRITE_BACKEND=true ./tf_run.sh
+# Destroy first, then nuke RG, then stop (no deployment)
+DO_DESTROY=true NUKE_RG="" EXIT_AFTER_CLEANUP=true ./tf_run.sh
+
+# If you changed the backend manually and want to move state:
+MIGRATE_STATE=true ./tf_run.sh
+RESET=true ./tf_run.sh # clean local metadata (fresh start), then deploy
+
+# try destroy using current backend, then deploy or not
+DO_DESTROY=true ./tf_run.sh 
+DO_DESTROY=true EXIT_AFTER_CLEANUP=true ./tf_run.sh # no deployment
+
+# nuke the RG (defaults to RG in backend.hcl), wait for deletion, then recreate backend and deploy or not
+NUKE_RG="" CREATE_BACKEND=true ./tf_run.sh
+EXIT_AFTER_CLEANUP=true ./tf_run.sh # no deployment
+
+# Show outputs any time:
+terraform -chdir=terraform output
+        # This shows values like:postgres_fqdn, database, data_factory_name, storage_account_name, etc.
+```
+
+#### In project_root/terraform (Manual)
+
+A.) Install: Terraform ≥ 1.6, Azure CLI ≥ 2.58 at project root
+        - Login + select subscription:
 
 ```bash
 az login --tenant <YOUR_TENANT_ID>   # e.g. the Default Directory tenant GUID
@@ -107,10 +143,10 @@ az account show --query "{name:name, sub:id, tenant:tenantId}" -o tsv
 # List all subs/resources you can see (refresh tokens)
 az account list --refresh -o table
 az resource list --output table
-terraform destroy #to delete all resources in current state (for a re-run)
+terraform destroy #to delete all resources in current state (for a re-deployment)
 ```
 
-Make sure the Storage resource provider is registered (1-time per subscription)
+B.) Make sure the Storage resource provider is registered (1-time per subscription)
 
 ```bash
 az provider register --namespace Microsoft.Storage
@@ -119,10 +155,10 @@ az provider show --namespace Microsoft.Storage --query "registrationState" -o ts
 az provider show -n Microsoft.Storage
 ```
 
-### Create Terraform remote state (optional but recommended)
+C.) Create Terraform remote state
 
 ```bash
-# vars you choose
+# vars to create
 LOCATION="uksouth"
 RESOURCE_GROUP="rg-civicpulse-311"
 STACCOUNT="stcivicpulse$RANDOM"   # must be globally unique, lowercase only
@@ -133,34 +169,30 @@ az storage account create -n $STACCOUNT -g $RESOURCE_GROUP -l $LOCATION --sku St
 az storage container create --account-name $STACCOUNT --name $CONTAINER --auth-mode login
 
 echo "RG=$RESOURCE_GROUP  ST=$STACCOUNT  LOC=$LOCATION  CT=$CONTAINER"
-
+# copy STACCOUNT name into backend.hcl
 ```
 
-### Deploy Azure and services with Terraform: Initialize + apply at project_root/terraform
-
-```bash
-        - Validate config
-terraform fmt        # (optional, formats cleanly)
-```
+D.)  Fmt, Init, Validate, Plan, Apply
 
 ```bash
 cd Terraform-ETL-pipeline/terraform
-# rm -rf .terraform .terraform.lock.hcl (for a re-run)
+# rm -rf .terraform .terraform.lock.hcl (for a re-deployment)
+
+terraform fmt        # (optional, formats cleanly)
 
 # point backend at your backend.hcl created earlier
 terraform init -backend-config=backend.hcl
 
-#For  403 error: Run the init.sh script with below
+#If  403 error: Run the init.sh script with below
 chmod +x init.sh
 ./init.sh
-
 
 terraform validate
 terraform plan -out=tfplans/$(date +%Y-%m-%d_%H%M)-rerun.tfplan
 terraform apply "*.tfplan" -auto-approve
 ```
 
-- ERROR when applying:
+- If ERROR when applying:
  Error: `zone` can only be changed when exchanged with the zone specified in `high_availability.0.standby_availability_zone`with azurerm_postgresql_flexible_server.pg,
    Find the current zone with below and pin to     azurerm_postgresql_flexible_server
 
@@ -171,7 +203,7 @@ az postgres flexible-server show \
   --query "availabilityZone" -o tsv
 ```
 
-### Post-apply quick tests & Validation Steps
+E.)  Post-apply quick tests & Validation Steps
 
 ```bash
 # Outputs
@@ -196,7 +228,7 @@ OR UI
                 - SSL mode: Require
 ![pgAdmin](pgadmin.png)
 
-### Columns & SQL Initialisation (run once)
+### SQL Initialisation
 
 #### Required Columns for CivicPulse 311 Objectives
 
@@ -243,35 +275,35 @@ chmod +x db_init.sh
 RUN_TRANSFORM=true SINCE_INTERVAL='1 day' ./db_init.sh
 ```
 
-- test with sample file
+1.) test with sample file
 
 ```bash
 psql -h "$PGHOST" -d "$PGDB" -U "$PGUSER" \
   -v json_path="sql/stg/data/sample_311.json" \
   -f sql/stg/sample_insert.sql
-  
+
 RUN_TRANSFORM=true SINCE_INTERVAL='1 day' ./db_init.sh
 ```
 
-#### Airflow (local @ http://localhost:9090/home):
+### Airflow (local @ http://localhost:9090/home)
 
-- Install Airflow (pip ).
+<!-- - Install Airflow (pip ).
 - In Airflow UI → Admin → Connections → +
         - Conn ID: azure_storage_conn
         - Conn Type: Azure Blob Storage
         - Paste Storage connection string from Azure Portal (Storage Account → Access keys).
 - *Put airflow_dags/nyc_311_to_blob.py in the Airflow DAGs folder.* ***optional:(create a sysmlink for dags folder:ln -s /mnt/d/Terraform-ETL-pipeline/airflow_dags/nyc_311_to_blob.py /home/linuxtut/airflow/dags)***
-- *Start scheduler + webserver and enable the DAG.*
+- *Start scheduler + webserver and enable the DAG.* -->
 
 #### ADF (Load + Transform)
 
-- In ADF Studio, create:
+<!-- - In ADF Studio, create:
         - Linked Services: Blob (your storage) and PostgreSQL (to civicpulsedb, SSL on).
         - Datasets: Blob JSON input, Postgres stg.api_311_raw output.
         - Pipeline: Copy (Blob→Postgres) → Script (SELECT dwh.run_311_transform();).
-        - Trigger: hourly schedule or Blob event trigger for raw/api/311/**.
+        - Trigger: hourly schedule or Blob event trigger for raw/api/311/**. -->
 
 6. Power BI:
 
-- Connect to Azure PostgreSQL → DB civicpulsedb → view dwh.v_311_requests.
-- Build visuals (Import mode for speed, DirectQuery for freshness).
+<!-- - Connect to Azure PostgreSQL → DB civicpulsedb → view dwh.v_311_requests.
+- Build visuals (Import mode for speed, DirectQuery for freshness). -->
