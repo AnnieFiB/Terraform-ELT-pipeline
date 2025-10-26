@@ -1,0 +1,7 @@
+# Astro Runtime includes the following pre-installed providers packages: https://www.astronomer.io/docs/astro/runtime-image-architecture#provider-packages
+# Azure + Airflow provider (works on Python 3.11 / Astro Runtime 11)
+apache-airflow-providers-microsoft-azure>=10.0.0
+azure-identity>=1.17.0
+azure-storage-blob>=12.19.1
+pandas>=2.2.0
+requests>=2.31.0

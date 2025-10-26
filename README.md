@@ -36,20 +36,68 @@ API  →  Airflow (Extract)  →  Azure Blob Storage  →  Azure Data Factory[AD
 ### Repo structure
 
 ```bash
- Terraform-elt-pipeline/
- ├─ terraform/                  # Infrastructure-as-Code (provisions Azure)
- │  ├─ backend.tf               # Stores Terraform state in Azure storage
- │  ├─ providers.tf             # Pins provider versions and enables Azure
- │  ├─ variables.tf             # All knobs to tweak: region, env name, Postgres admin,IP etc.
- │  ├─ main.tf                  # The orchestration brain. Creates the resource group, then calls module
- │  ├─ outputs.tf               # surfaces useful info after apply (e.g., pg_fqdn to connect psql).
- │  └─ terraform.tfvars
- |
- ├─ airflow_dags/nyc_311_to_blob.py # hits the open NYC 311 endpoint (example) and writes the JSON to Blob in azure
- └─ sql/
-    ├─ stg/api_311_raw.sql , sample_insert.sql     # SQL scripts for loading from azure - creates a staging table to hold jsonb payloads
-    │   └─ data/sample_311.json
-    └─ dwh/schema.sql, transform_load.sql    # reads recent staging rows, flattens JSON into columns,upserts by request_id.
+Terraform-ELT-pipeline/
+├─ terraform/                  # Terraform IaC (infrastructure)
+│   ├─ main.tf
+│   ├─ variables.tf
+│   ├─ providers.tf
+│   ├─ backend.tf              # The orchestration brain. Creates the resource group, then calls module
+│   ├─ backend.hcl              
+│   ├─ outputs.tf              # surfaces useful info after apply (e.g., pg_fqdn to connect psql).
+│   └─ terraform.tfvars
+│   └─ tfplans/
+│   
+│
+├─ sql/                        # Database setup (staging + DWH)
+│   ├─ stg/
+│   │   ├─ api_311_raw.sql      # SQL scripts for loading from azure - creates a staging table to hold jsonb payloads
+│   │   └─ sample_insert.sql
+│   └─ dwh/
+│       ├─ schema.sql
+│       └─ transform_load.sql   # reads recent staging rows, flattens JSON into columns,upserts by request_id.
+│
+├─ astro-civicpulse/            # Astronomer Airflow DAGs (EXTRACT layer: keeps are required scripts, variables ,DAG, etc)
+│   ├─ nyc_311_to_blob.py      # 
+│ 
+│
+├─ scripts/
+│   ├─ db_init.sh              # runs SQL init sequence
+│   ├─ tf_run.sh               # terraform automation script
+│   └─ requirements.txt        # python dependencies
+│
+├─ .env                        # shared credentials (used by Airflow and scripts)
+├─ README.md
+└─ .gitignore
+
+
+Terraform-ELT-pipeline/
+├─ terraform/
+│  ├─ main.tf                 # ADF + Linked Services + Datasets + Pipeline + Trigger
+│  ├─ variables.tf            # All inputs (RG name, ADF name, conn strings, etc.)
+│  ├─ providers.tf            # azurerm provider + versions
+│  ├─ backend.tf              # Remote state backend block (azurerm) + reconfigure notes
+│  ├─ backend.hcl             # storage_account_name, container_name, key (no secrets)
+│  ├─ outputs.tf              # ADF names, pipeline name, trigger, etc.
+│  ├─ terraform.tfvars        # your non-secret defaults (keep secrets out)
+│  └─ tfplans/                # optional: where you save `terraform plan -out=...`
+│
+├─ sql/
+│  ├─ stg/api_311_raw.sql
+│  └─ dwh/{schema.sql, transform_load.sql}
+│
+├─ astro-civicpulse/
+│  └─ dags/nyc_311_to_blob.py
+│
+├─ scripts/
+│  ├─ init.sh                 # SAFE terraform init using env/tag filters (revised)
+│  ├─ tf_run.sh               # plan/apply helper
+│  └─ requirements.txt
+│
+├─ .env
+├─ README.md
+└─ .gitignore
+
+
 ```
 
 ## Infrastructure with Terraform
@@ -98,30 +146,32 @@ C.) Terraform configuration files
 
 ```bash
 # from project root
-chmod +x tf_run.sh
+chmod +x ./scripts/tf_run.sh
 
 # Normal plan/apply (with outputs printed at the end):
-./tf_run.sh
+./scripts/tf_run.sh
 
 # Create a fresh backend with a new storage account and auto-write backend.hcl:
-CREATE_BACKEND=true WRITE_BACKEND=true ./tf_run.sh
+CREATE_BACKEND=true WRITE_BACKEND=true ./scripts/tf_run.sh
+
+RESET=true ./scripts/tf_run.sh # clean local metadata (fresh start), then deploy
 
 # to redeploy 
-RESET=true DO_DESTROY=true NUKE_RG="" CCREATE_BACKEND=true WRITE_BACKEND=true ./tf_run.sh
+RESET=true DO_DESTROY=true NUKE_RG="" CCREATE_BACKEND=true WRITE_BACKEND=true ./scripts/tf_run.sh
+
 # Destroy first, then nuke RG, then stop (no deployment)
-DO_DESTROY=true NUKE_RG="" EXIT_AFTER_CLEANUP=true ./tf_run.sh
+DO_DESTROY=true NUKE_RG="" EXIT_AFTER_CLEANUP=true ./scripts/tf_run.sh
 
 # If you changed the backend manually and want to move state:
-MIGRATE_STATE=true ./tf_run.sh
-RESET=true ./tf_run.sh # clean local metadata (fresh start), then deploy
+MIGRATE_STATE=true ./scripts/tf_run.sh
 
 # try destroy using current backend, then deploy or not
-DO_DESTROY=true ./tf_run.sh 
-DO_DESTROY=true EXIT_AFTER_CLEANUP=true ./tf_run.sh # no deployment
+DO_DESTROY=true ./scripts/tf_run.sh 
+DO_DESTROY=true EXIT_AFTER_CLEANUP=true ./scripts/tf_run.sh # no deployment
 
 # nuke the RG (defaults to RG in backend.hcl), wait for deletion, then recreate backend and deploy or not
-NUKE_RG="" CREATE_BACKEND=true ./tf_run.sh
-EXIT_AFTER_CLEANUP=true ./tf_run.sh # no deployment
+NUKE_RG="" CREATE_BACKEND=true ./scripts/tf_run.sh
+EXIT_AFTER_CLEANUP=true ./scripts/tf_run.sh # no deployment
 
 # Show outputs any time:
 terraform -chdir=terraform output
@@ -266,44 +316,77 @@ OR UI
 
 ```bash
 # make executable
-chmod +x db_init.sh
+chmod +x ./scripts/db_apply.sh
 
-# run without executing transform 
-./db_init.sh
+# First-time end-to-end (staging → schema → transform):
+./scripts/db_apply.sh --all
 
-# or run and immediately execute transform for last 1 day
-RUN_TRANSFORM=true SINCE_INTERVAL='1 day' ./db_init.sh
+# Daily refresh (transform only):
+./scripts/db_apply.sh --transform
+
+# force credentials:
+PGUSER=pgadmin PGPASSWORD='***' ./scripts/db_apply.sh --transform
+
 ```
 
 1.) test with sample file
 
 ```bash
-psql -h "$PGHOST" -d "$PGDB" -U "$PGUSER" \
-  -v json_path="sql/stg/data/sample_311.json" \
-  -f sql/stg/sample_insert.sql
+./scripts/db_apply.sh --all
 
-RUN_TRANSFORM=true SINCE_INTERVAL='1 day' ./db_init.sh
+./scripts/db_apply.sh --transform
 ```
 
-### Airflow (local @ http://localhost:9090/home)
+### Airflow (local @ Astronomer @  http://localhost:8081)
 
-<!-- - Install Airflow (pip ).
-- In Airflow UI → Admin → Connections → +
-        - Conn ID: azure_storage_conn
-        - Conn Type: Azure Blob Storage
-        - Paste Storage connection string from Azure Portal (Storage Account → Access keys).
-- *Put airflow_dags/nyc_311_to_blob.py in the Airflow DAGs folder.* ***optional:(create a sysmlink for dags folder:ln -s /mnt/d/Terraform-ETL-pipeline/airflow_dags/nyc_311_to_blob.py /home/linuxtut/airflow/dags)***
-- *Start scheduler + webserver and enable the DAG.* -->
+#### Resources
 
-#### ADF (Load + Transform)
+- https://www.astronomer.io/docs/astro/cli/install-cli
+- https://www.astronomer.io/docs/learn/get-started-with-airflow
+- https://www.datacamp.com/tutorial/getting-started-with-apache-airflow
 
-<!-- - In ADF Studio, create:
-        - Linked Services: Blob (your storage) and PostgreSQL (to civicpulsedb, SSL on).
+```powershell
+Get-NetTCPConnection -LocalPort 5432/8080 | Format-Table -Auto
+Get-Process -Id 39260
+Get-Service *postgres* | Select Name, Status
+Stop-Service -Name postgresql-x64-18 /// Stop-Process -Id 5356 -Force
+```
+
+```bash
+ mkdir astro-civicpulse
+ cd /mnt/d/Portfolio/Terraform-ELT-pipeline/astro-civicpulse
+ astro dev init
+
+# astro config set webserver.port 8080
+# astro config set postgres.port 5440 
+
+astro dev start
+astro dev stop
+astro dev restart
+
+➤ Airflow UI: http://localhost:8080
+➤ Postgres Database: postgresql://localhost:5432/postgres
+➤ The default Postgres DB credentials are: postgres:postgres
+
+astro dev logs --scheduler | tail -n 20
+astro dev logs --scheduler --follow
+
+astro dev run dags list
+astro dev run dags list-import-errors
+
+
+
+```
+
+### ADF (Load + Transform)
+
+- In ADF Studio, create:
+        - Linked Services: Blob (your storage) and PostgreSQL (to civicpulse_311, SSL on).
         - Datasets: Blob JSON input, Postgres stg.api_311_raw output.
         - Pipeline: Copy (Blob→Postgres) → Script (SELECT dwh.run_311_transform();).
-        - Trigger: hourly schedule or Blob event trigger for raw/api/311/**. -->
+        - Trigger: hourly schedule or Blob event trigger for raw/api/311/**.
 
-6. Power BI:
+## Power BI
 
 <!-- - Connect to Azure PostgreSQL → DB civicpulsedb → view dwh.v_311_requests.
 - Build visuals (Import mode for speed, DirectQuery for freshness). -->
