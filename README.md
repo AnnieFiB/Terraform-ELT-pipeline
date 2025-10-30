@@ -145,6 +145,12 @@ C.) Terraform configuration files
 #### In project root (Auto)
 
 ```bash
+#  Create Terraform remote state
+chmod +x ./scripts/setup_backend.sh
+./scripts/setup_backend.sh
+```
+
+```bash
 # from project root
 chmod +x ./scripts/tf_run.sh
 
@@ -157,7 +163,7 @@ CREATE_BACKEND=true WRITE_BACKEND=true ./scripts/tf_run.sh
 RESET=true ./scripts/tf_run.sh # clean local metadata (fresh start), then deploy
 
 # to redeploy 
-RESET=true DO_DESTROY=true NUKE_RG="" CCREATE_BACKEND=true WRITE_BACKEND=true ./scripts/tf_run.sh
+RESET=true DO_DESTROY=true NUKE_RG="" CREATE_BACKEND=true WRITE_BACKEND=true ./scripts/tf_run.sh
 
 # Destroy first, then nuke RG, then stop (no deployment)
 DO_DESTROY=true NUKE_RG="" EXIT_AFTER_CLEANUP=true ./scripts/tf_run.sh
@@ -210,8 +216,8 @@ C.) Create Terraform remote state
 ```bash
 # vars to create
 LOCATION="uksouth"
-RESOURCE_GROUP="rg-civicpulse-311"
-STACCOUNT="stcivicpulse$RANDOM"   # must be globally unique, lowercase only
+RESOURCE_GROUP="tf-backend-rg"
+STACCOUNT="sabackend$RANDOM"   # must be globally unique, lowercase only
 CONTAINER="tfstate"
 
 az group create -n $RESOURCE_GROUP -l $LOCATION
@@ -219,7 +225,7 @@ az storage account create -n $STACCOUNT -g $RESOURCE_GROUP -l $LOCATION --sku St
 az storage container create --account-name $STACCOUNT --name $CONTAINER --auth-mode login
 
 echo "RG=$RESOURCE_GROUP  ST=$STACCOUNT  LOC=$LOCATION  CT=$CONTAINER"
-# copy STACCOUNT name into backend.hcl
+# copy STACCOUNT name into backend.hcl/backend.tf
 ```
 
 D.)  Fmt, Init, Validate, Plan, Apply
@@ -230,15 +236,14 @@ cd Terraform-ETL-pipeline/terraform
 
 terraform fmt        # (optional, formats cleanly)
 
-# point backend at your backend.hcl created earlier
-terraform init -backend-config=backend.hcl
+terraform init 
 
 #If  403 error: Run the init.sh script with below
 chmod +x init.sh
 ./init.sh
 
 terraform validate
-terraform plan -out=tfplans/$(date +%Y-%m-%d_%H%M)-rerun.tfplan
+terraform plan -out=tfplans/$(date +%Y-%m-%d_%H%M)-pg-azurefirewall-update.tfplan
 terraform apply "*.tfplan" -auto-approve
 ```
 
@@ -264,8 +269,11 @@ az resource list --output table
 az storage container list --account-name $(terraform output -raw storage_account_name) --auth-mode login -o table
 
 # Postgres Connectivity (local Power BI / psql)
-PGPASSWORD="${TF_VAR_pg_admin_pwd}" \
-psql "host=$(terraform output -raw postgres_fqdn) dbname=$(terraform output -raw database) user=${TF_VAR_pg_admin_user:-pgadmin} sslmode=require" -c "\l"
+PGHOST=$(terraform output -raw postgres_fqdn)
+PGDATABASE=$(terraform output -raw database)
+PGUSER=${TF_VAR_pg_admin_user:-pgadmin}
+
+psql "host=$PGHOST dbname=$PGDATABASE user=$PGUSER sslmode=require" -c "\l"
 ```
 
 OR UI
@@ -357,11 +365,13 @@ Stop-Service -Name postgresql-x64-18 /// Stop-Process -Id 5356 -Force
  cd /mnt/d/Portfolio/Terraform-ELT-pipeline/astro-civicpulse
  astro dev init
 
-# astro config set webserver.port 8080
+# astro config set webserver.port 8090
 # astro config set postgres.port 5440 
 
 astro dev start
 astro dev stop
+
+astro dev kill
 astro dev restart
 
 ➤ Airflow UI: http://localhost:8080
@@ -373,9 +383,22 @@ astro dev logs --scheduler --follow
 
 astro dev run dags list
 astro dev run dags list-import-errors
+# ----------------------------------------------------------
+# check blocked port on powershell
+netstat -aon | findstr :8080
+asklist /FI "PID eq 5908"
 
 
 
+docker stop $(docker ps -a --filter "name=astro" -q)
+docker rm $(docker ps -a --filter "name=astro" -q)
+
+astro dev kill
+#docker system prune -af --volumes
+astro dev restart
+
+astro dev ps
+cat .astro/config.yaml
 ```
 
 ### ADF (Load + Transform)
