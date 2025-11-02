@@ -1,121 +1,149 @@
-# Terraform-ELT-pipeline-for-Transparent-City-Metrics (NYC 311 API)  by CivicPulse 311
+# **CivicPulse 311 — Urban Cities Live Service Intelligence & Reporting**
 
-A Cloud-native ELT pipeline for NYC 311 data, built with Terraform, Airflow, and Azure. Enables real-time ingestion, transformation, and reporting via Power BI. Designed for resilience, transparency, and operational insight into the city service metrics.
+## **Background Story**
 
-## Business Challenge and Objectives
+CivicPulse 311 is part of the *Urban Cities Live Service Intelligence* initiative — a public-sector analytics solution built to provide **real-time operational visibility** into NYC’s 311 non-emergency service requests.  
 
-CivicPulse 311 addresses the evolving demands of NYC’s non-emergency service ecosystem by transforming raw 311 data into actionable, real-time intelligence. Key challenges include:
-        - **Customer Demand**: Need for live, explainable insights and equity views across neighborhoods.
-        - **System Reliability**: Ensuring robust orchestration and anomaly detection in data pipelines.
-        - **Data Latency & Scalability**: Managing peak volumes without lag, and supporting schema evolution.
+This project automates the **entire ELT pipeline** — from data ingestion to dashboarding — combining:
 
-### Project Objectives
+- **Airflow (Astronomer)** for API extraction and orchestration  
+- **Terraform** for reproducible infrastructure provisioning  
+- **Azure Data Factory** and **PostgreSQL** for transformation and load  
+- **Power BI** for visualization  
 
-The project aims to deliver a resilient, cloud-native ELT pipeline with:
-        - **Scalable Near Real-Time Ingestion**: Fault-tolerant extraction from the NYC 311 API.
-        - **Real-Time Reporting Tools**: Power BI dashboards for volumes, SLA compliance, and complaint mix.
-        - **Enhanced Data Accuracy**: Validated movement from raw source to curated database layers.
-        - **Improved System Monitoring**: Instrumentation and alerts for pipeline health and data quality.
+The goal: To build a Data Platform that will process the data from the [NY311 rest API](https://data.cityofnewyork.us/resource/erm2-nwe9.json) into a cloud based Database/Data Warehouse for predictive analytics which will empower civic agencies and data teams to measure service efficiency, SLA compliance, and equity outcomes across boroughs by
 
-## Architecture & Setup
+### **Business Challenge**
 
-### Architecture
+| Theme | Description |
+|--------|--------------|
+| **Manual Processes** | Data analysts manually downloaded 311 datasets and performed transformations offline. |
+| **Data Latency** | Data refresh took >24 hours, limiting decision-making accuracy. |
+| **Scalability** | No automated schema validation or incremental ingestion. |
+| **Governance** | Infrastructure was manually configured, lacking IaC traceability. |
 
-![Data Pipeline Architecture](eltarchitecture.png)
+### **Objectives**
 
-API  →  Airflow (Extract)  →  Azure Blob Storage  →  Azure Data Factory[ADF (Load + Orchestrate)]  →  Azure PostgreSQL (Transform in SQL) →  Power BI
+1. Build a **fully automated data pipeline** using Airflow, Terraform, and ADF.  
+2. Ingest, validate, and load **NYC 311 service request data** incrementally.  
+3. Transform raw JSON to analytical tables with **PostgreSQL upserts**.  
+4. Serve data into **Power BI dashboards** for SLA and operational reporting.  
 
-| Layer                | Tool                     | Purpose                                                         |
-| -------------------- | ------------------------ | --------------------------------------------------------------- |
-| **E (Extract)**      | Apache Airflow           | Fetch data from an API and save it to Azure Blob (`raw/`)       |
-| **L (Load)**         | Azure Data Factory (ADF) | Copy data from Blob → PostgreSQL staging table                  |
-| **T (Transform)**    | PostgreSQL (SQL scripts) | Clean & reshape data inside the DB for Power BI                 |
-| **Visualization**    | Power BI                 | Build dashboards from the warehouse tables                      |
-| **Infra management** | Terraform                | Create Azure resources (Blob Storage, Postgres, ADF, Key Vault) |
+## Project Setup
 
-### Repo structure
+This provides instructions on how to setup the project environment and provision necessary configurations
+
+### Requirements
+
+- A virtual environment (python -m venv myenv  # Create virtual environment)
+- Python 3.10 + higher
+- Azure Cloud [Storage Account, PostgreSQL, Container Registry, Data Factory]
+- Astronomer Airflow
+- Terraform
+- Docker Desktop
+- Microsoft Power BI
+
+### **High-Level Flow**
+
+NYC 311 API  →  Airflow (Astronomer)  →  Azure Blob (Parquet)
+             →  ADF Copy Activity  →  PostgreSQL (stg → dwh)
+             →  Power BI Dashboards
+
+### **Solution Architecture**
+
+![Data Pipeline Architecture](Terraform-ELT-pipeline\images\eltarchitecture.png)
+
+```bash
+| Layer | Tool | Purpose |
+|-------|------|----------|
+| **Infrastructure (IaC)** | Terraform | Creates Azure RG, Storage, ADF, Postgres, Linked Services |
+| **Extract (E)** | Airflow (Astronomer) | Fetches last 90 days of 311 data → writes Parquet to Blob |
+| **Load (L)** | Azure Data Factory | Copies Parquet → `stg.api_311_flat` |
+| **Transform (T)** | PostgreSQL SQL | Upserts new data → `dwh.fact_311_requests` |
+| **Visualize** | Power BI | SLA, backlog, and service metrics dashboards |
+```
+
+## **Technology Stack**
+
+- **Python 3 / Pandas / PyArrow** — Parquet serialization and typing  
+- **Apache Airflow (Astronomer)** — Orchestration and incremental control  
+- **Terraform (IaC)** — Automated Azure infrastructure deployment  
+- **Azure Blob Storage** — Data lake landing zone  
+- **Azure Data Factory (ADF)** — ETL orchestration (Copy + Script Activities)  
+- **PostgreSQL (Azure)** — Data warehouse  
+- **Power BI** — Visualization and executive reporting  
+
+## **Repository Structure**
 
 ```bash
 Terraform-ELT-pipeline/
-├─ terraform/                  # Terraform IaC (infrastructure)
-│   ├─ main.tf
-│   ├─ variables.tf
-│   ├─ providers.tf
-│   ├─ backend.tf              # The orchestration brain. Creates the resource group, then calls module
-│   ├─ backend.hcl              
-│   ├─ outputs.tf              # surfaces useful info after apply (e.g., pg_fqdn to connect psql).
-│   └─ terraform.tfvars
-│   └─ tfplans/
-│   
+├─ terraform/                  # Terraform Infrastructure as Code (IaC)
+│   ├─ main.tf                 # Creates ADF, Storage, PostgreSQL, Linked Services
+│   ├─ variables.tf            # Input variables for reusable IaC
+│   ├─ providers.tf            # azurerm provider + version constraints
+│   ├─ backend.tf              # Remote state config (Azure Storage backend)
+│   ├─ outputs.tf              # Exposes RG, ADF, and DB connection info
+│   ├─ terraform.tfvars        # Environment defaults (non-secrets)
+│   └─ tfplans/                # Optional folder for saved plan files
 │
-├─ sql/                        # Database setup (staging + DWH)
+├─ sql/                        # Database DDL + ETL logic
 │   ├─ stg/
-│   │   ├─ api_311_raw.sql      # SQL scripts for loading from azure - creates a staging table to hold jsonb payloads
+│   │   ├─ api_311_raw.sql     # Creates api_311_flat table for stagging
 │   │   └─ sample_insert.sql
 │   └─ dwh/
-│       ├─ schema.sql
-│       └─ transform_load.sql   # reads recent staging rows, flattens JSON into columns,upserts by request_id.
+│       ├─ schema.sql          # Creates dwh.fact_311_requests table for dwh
+│       └─ transform_load.sql  # Defines dwh.run_311_transform() upsert logic
 │
-├─ astro-civicpulse/            # Astronomer Airflow DAGs (EXTRACT layer: keeps are required scripts, variables ,DAG, etc)
-│   ├─ nyc_311_to_blob.py      # 
-│ 
+├─ astro-civicpulse/           # Airflow (Astronomer) extract DAGs
+│   ├─ dags/
+│   │   └─ nyc_311_to_blob_pq.py  # Extracts 311 data → Parquet → Azure Blob
+│   └─ requirements.txt        # DAG dependencies (pandas, requests, pyarrow, azure-storage-blob)
 │
-├─ scripts/
-│   ├─ db_init.sh              # runs SQL init sequence
-│   ├─ tf_run.sh               # terraform automation script
-│   └─ requirements.txt        # python dependencies
+├─ scripts/                    # Shell utilities
+│   ├─ db_init.sh              # Executes SQL initialization (stg + dwh)
+│   ├─ tf_run.sh               # Terraform automation (init, plan, apply)
+│   └─ requirements.txt        # Python dependency list for local runs
 │
-├─ .env                        # shared credentials (used by Airflow and scripts)
-├─ README.md
-└─ .gitignore
-
-
-Terraform-ELT-pipeline/
-├─ terraform/
-│  ├─ main.tf                 # ADF + Linked Services + Datasets + Pipeline + Trigger
-│  ├─ variables.tf            # All inputs (RG name, ADF name, conn strings, etc.)
-│  ├─ providers.tf            # azurerm provider + versions
-│  ├─ backend.tf              # Remote state backend block (azurerm) + reconfigure notes
-│  ├─ backend.hcl             # storage_account_name, container_name, key (no secrets)
-│  ├─ outputs.tf              # ADF names, pipeline name, trigger, etc.
-│  ├─ terraform.tfvars        # your non-secret defaults (keep secrets out)
-│  └─ tfplans/                # optional: where you save `terraform plan -out=...`
-│
-├─ sql/
-│  ├─ stg/api_311_raw.sql
-│  └─ dwh/{schema.sql, transform_load.sql}
-│
-├─ astro-civicpulse/
-│  └─ dags/nyc_311_to_blob.py
-│
-├─ scripts/
-│  ├─ init.sh                 # SAFE terraform init using env/tag filters (revised)
-│  ├─ tf_run.sh               # plan/apply helper
-│  └─ requirements.txt
-│
-├─ .env
-├─ README.md
-└─ .gitignore
-
-
+├─ civilpulse311_dashboard.pbix   #PowerBI dashboard                     
+├─ README.md                   # This documentation
+└─ .gitignore                  # Ignores .tfstate, .pyc, secrets, etc.
 ```
 
-## Infrastructure with Terraform
+## **Usage**
 
-- ***install Terraform and Azure CLI first.***
+### Clone the repository and create a virtual environment
 
-A.) Infrastructure Resources/ Modules
+```bash
+# clone the project repository
+git clone https://github.com/AnnieFiB/Terraform-ELT-pipeline
 
-- **Resources:** [Terraform Registry](https://registry.terraform.io)
-- Create and activate a virtual env: python -m venv .venv
+# Navigate to the cloned repository
+cd https://github.com/AnnieFiB/Terraform-ELT-pipeline
+```
 
-1. Terraform builds the Azure pieces:
-        - Resource Group
-        - Storage Account (Blob)
-        - Azure PostgreSQL Flexible Server
-        - Azure Data Factory
+```bash
+# Create and activate a virtual env: 
+python -m venv .venv
+source venv/Scripts/activate
+```
 
-B.) Install tools
+### **Terraform**
+
+#### **Resources:** [Terraform Registry](https://registry.terraform.io)
+
+#### Main Components
+
+| File | Purpose |
+|------|----------|
+| **main.tf** | Defines ADF, Blob Storage, and PostgreSQL resources |
+| **backend.tf** | Configures remote state using Azure Storage container |
+| **providers.tf** | Loads azurerm provider + version |
+| **outputs.tf** | Exposes connection strings and resource names |
+| **tf_run.sh** | Helper script to safely init, plan, and apply infrastructure |
+
+#### Terraform Backend
+
+ ***install Terraform and Azure CLI first.***
 
 ```bash
 # Install Azure CLI
@@ -131,35 +159,26 @@ az account set --subscription "<your-subscription-id>"
 
 # check active subscription
 az account show
-
+az account list --output table
+copy the subscription id and paste in a *.tfvars file 
 ```
-
-C.) Terraform configuration files
-
-- Create a terraform/ folder like above
-
-## Usage - How to run (ground up)
-
-### Deploy Azure and services with Terraform: Initialize + apply in project_root or project_root/terraform
-
-#### In project root (Auto)
 
 ```bash
 #  Create Terraform remote state
-chmod +x ./scripts/setup_backend.sh
+# chmod +x ./scripts/setup_backend.sh
 ./scripts/setup_backend.sh
 ```
 
-```bash
-# from project root
-chmod +x ./scripts/tf_run.sh
+#### Provision Cloud Infrastructure with Terraform (Auto-run)
 
-# Normal plan/apply (with outputs printed at the end):
+```bash
+ # Provision all services needed for project at project root (Auto-run)
+#chmod +x ./scripts/tf_run.sh
 ./scripts/tf_run.sh
 
+# other options:
 # Create a fresh backend with a new storage account and auto-write backend.hcl:
 CREATE_BACKEND=true WRITE_BACKEND=true ./scripts/tf_run.sh
-
 RESET=true ./scripts/tf_run.sh # clean local metadata (fresh start), then deploy
 
 # to redeploy 
@@ -184,81 +203,29 @@ terraform -chdir=terraform output
         # This shows values like:postgres_fqdn, database, data_factory_name, storage_account_name, etc.
 ```
 
-#### In project_root/terraform (Manual)
-
-A.) Install: Terraform ≥ 1.6, Azure CLI ≥ 2.58 at project root
-        - Login + select subscription:
+#### Provision Cloud Infrastructure with Terraform (Manual)
 
 ```bash
-az login --tenant <YOUR_TENANT_ID>   # e.g. the Default Directory tenant GUID
-az account set --subscription <YOUR_SUBSCRIPTION_ID>
-
-# verify
-az account show --query "{name:name, sub:id, tenant:tenantId}" -o tsv
-
-# List all subs/resources you can see (refresh tokens)
-az account list --refresh -o table
-az resource list --output table
-terraform destroy #to delete all resources in current state (for a re-deployment)
-```
-
-B.) Make sure the Storage resource provider is registered (1-time per subscription)
-
-```bash
-az provider register --namespace Microsoft.Storage
-az provider show --namespace Microsoft.Storage --query "registrationState" -o tsv
-# Wait until it prints Registered
-az provider show -n Microsoft.Storage
-```
-
-C.) Create Terraform remote state
-
-```bash
-# vars to create
-LOCATION="uksouth"
-RESOURCE_GROUP="tf-backend-rg"
-STACCOUNT="sabackend$RANDOM"   # must be globally unique, lowercase only
-CONTAINER="tfstate"
-
-az group create -n $RESOURCE_GROUP -l $LOCATION
-az storage account create -n $STACCOUNT -g $RESOURCE_GROUP -l $LOCATION --sku Standard_LRS --kind StorageV2
-az storage container create --account-name $STACCOUNT --name $CONTAINER --auth-mode login
-
-echo "RG=$RESOURCE_GROUP  ST=$STACCOUNT  LOC=$LOCATION  CT=$CONTAINER"
-# copy STACCOUNT name into backend.hcl/backend.tf
-```
-
-D.)  Fmt, Init, Validate, Plan, Apply
-
-```bash
+# Navigate into the terraform folder
 cd Terraform-ETL-pipeline/terraform
 # rm -rf .terraform .terraform.lock.hcl (for a re-deployment)
 
-terraform fmt        # (optional, formats cleanly)
+£ format the code
+terraform fmt
 
+# initiliase  
 terraform init 
 
-#If  403 error: Run the init.sh script with below
-chmod +x init.sh
-./init.sh
-
+# validate configurations
 terraform validate
-terraform plan -out=tfplans/$(date +%Y-%m-%d_%H%M)-pg-azurefirewall-update.tfplan
+
+ # Plan and apply to provision resources
+terraform plan -out=tfplans/$(date +%Y-%m-%d_%H%M)-adf_ls_dts_pipl.tfplan
 terraform apply "*.tfplan" -auto-approve
+
 ```
 
-- If ERROR when applying:
- Error: `zone` can only be changed when exchanged with the zone specified in `high_availability.0.standby_availability_zone`with azurerm_postgresql_flexible_server.pg,
-   Find the current zone with below and pin to     azurerm_postgresql_flexible_server
-
-```bash
-az postgres flexible-server show \
-  -g rg-civicpulse-dev \
-  -n pg-civicpulse-dev \
-  --query "availabilityZone" -o tsv
-```
-
-E.)  Post-apply quick tests & Validation Steps
+#### Post-apply quick tests & Validation Steps
 
 ```bash
 # Outputs
@@ -276,7 +243,8 @@ PGUSER=${TF_VAR_pg_admin_user:-pgadmin}
 psql "host=$PGHOST dbname=$PGDATABASE user=$PGUSER sslmode=require" -c "\l"
 ```
 
-OR UI
+OR UI 
+![pgAdmin](pgadmin.png)
         - pgAdmin 4: Download
         - Azure Data Studio: connect with:
                 - Server: <postgres_fqdn from Terraform output>
@@ -284,9 +252,8 @@ OR UI
                 - Username: pgadmin
                 - Password: ${TF_VAR_pg_admin_pwd}
                 - SSL mode: Require
-![pgAdmin](pgadmin.png)
 
-### SQL Initialisation
+### Postgres DB Initialisation
 
 #### Required Columns for CivicPulse 311 Objectives
 
@@ -337,79 +304,151 @@ PGUSER=pgadmin PGPASSWORD='***' ./scripts/db_apply.sh --transform
 
 ```
 
-1.) test with sample file
+#### **PostgreSQL Schema Summary**
+
+| Schema | Table | Purpose |
+|---------|--------|----------|
+| **stg** | `api_311_flat` | Raw landing data (append-only) |
+| **dwh** | `fact_311_requests` | Clean deduped table  |
+| **dwh** | `v_311_requests` | Clean deduped view for BI |
+| **Function** | `dwh.run_311_transform()` | Dedup + Upsert from stg → dwh |
+
+#### **Test with sample file**  
 
 ```bash
-./scripts/db_apply.sh --all
+./scripts/db_apply.sh --all #(source to stg to dwh)
 
-./scripts/db_apply.sh --transform
+./scripts/db_apply.sh --transform # (stg to dwh)
 ```
 
-### Airflow (local @ Astronomer @  http://localhost:8081)
+![db_Schema](Terraform-ELT-pipeline\images\dbschema.png)
 
-#### Resources
+### **Airflow (Astronomer) DAG: nyc_311_to_blob.py**
 
-- https://www.astronomer.io/docs/astro/cli/install-cli
-- https://www.astronomer.io/docs/learn/get-started-with-airflow
-- https://www.datacamp.com/tutorial/getting-started-with-apache-airflow
+#### **Resources**
+
+- install astronomer docker, airflow and wsl(if working on windows)
+- [Install astronomer](https://www.astronomer.io/docs/astro/cli/install-cli)
+- [Getting Started with astronomer airflow](https://www.astronomer.io/docs/learn/get-started-with-airflow)
+- [Getting Started with apache airflow](https://www.datacamp.com/tutorial/getting-started-with-apache-airflow)
+
+#### **Execution**
+
+```bash
+# from venv, navigate to the linux os and create a directory to house the airflow
+wsl
+ mkdir astro-civicpulse
+
+# navigate to the created folder and  Initialise the airflow astro project
+cd /mnt/d/Portfolio/Terraform-ELT-pipeline/astro-civicpulse
+astro dev init
+
+#set all required variables in airflow_settings.yaml (Blobstorage account key/connectionstring, NYC URL, )
+
+# start the astro webserver
+astro dev start #(ensure docker desktop is running)
+```
 
 ```powershell
+#if port error during start-up
+
+# check blocked port on powershell, kill service and restart astro OR change the webport using
+# astro config set webserver.port 8090
+# astro config set postgres.port 5440 
+
+# check port listing on airflow : astro dev ps
+# check config has been updated with new port: cat .astro/config.yaml
+
+netstat -aon | findstr :8080
+tasklist /FI "PID eq <>"
+
+#OR
+
 Get-NetTCPConnection -LocalPort 5432/8080 | Format-Table -Auto
 Get-Process -Id 39260
 Get-Service *postgres* | Select Name, Status
 Stop-Service -Name postgresql-x64-18 /// Stop-Process -Id 5356 -Force
+
 ```
 
 ```bash
- mkdir astro-civicpulse
- cd /mnt/d/Portfolio/Terraform-ELT-pipeline/astro-civicpulse
- astro dev init
 
-# astro config set webserver.port 8090
-# astro config set postgres.port 5440 
-
-astro dev start
-astro dev stop
-
-astro dev kill
+astro dev kill  # Or astro dev stop
 astro dev restart
 
-➤ Airflow UI: http://localhost:8080
-➤ Postgres Database: postgresql://localhost:5432/postgres
-➤ The default Postgres DB credentials are: postgres:postgres
-
-astro dev logs --scheduler | tail -n 20
-astro dev logs --scheduler --follow
-
+# Run dag list to ensure no import errors if otherwsie, fix error using astro dev run dags list-import-errors
 astro dev run dags list
-astro dev run dags list-import-errors
-# ----------------------------------------------------------
-# check blocked port on powershell
-netstat -aon | findstr :8080
-asklist /FI "PID eq 5908"
 
+# upon starting, follow logs in the UI provided and pause, start or stop dag)
 
-
-docker stop $(docker ps -a --filter "name=astro" -q)
-docker rm $(docker ps -a --filter "name=astro" -q)
-
-astro dev kill
-#docker system prune -af --volumes
-astro dev restart
-
-astro dev ps
-cat .astro/config.yaml
 ```
 
-### ADF (Load + Transform)
+![Airflow_ui](Terraform-ELT-pipeline\images\airflowui.png)
+
+### **ADF Pipeline Overview**
 
 - In ADF Studio, create:
-        - Linked Services: Blob (your storage) and PostgreSQL (to civicpulse_311, SSL on).
-        - Datasets: Blob JSON input, Postgres stg.api_311_raw output.
+        - Linked Services: Blob (your storage) and PostgreSQL (to civicpulse_311).
+        - Datasets: Blob parquet input, Postgres stg.api_311_flat output.
         - Pipeline: Copy (Blob→Postgres) → Script (SELECT dwh.run_311_transform();).
         - Trigger: hourly schedule or Blob event trigger for raw/api/311/**.
 
-## Power BI
+#### Copy Activity
 
-<!-- - Connect to Azure PostgreSQL → DB civicpulsedb → view dwh.v_311_requests.
+- **Source:** Azure Blob Storage (Parquet)  
+- **Sink:** PostgreSQL → `stg.api_311_flat`  
+- **Additional Column:**  
+  `src_file = @{concat('ingest_date=', pipeline().parameters.ingest_date)}`  
+
+#### Script Activity
+
+- Executes:
+
+  ```sql
+  SELECT dwh.run_311_transform(interval '1 hour');
+  ```
+
+![adf_pipeline](Terraform-ELT-pipeline\images\adf_pipeline.png)
+
+### **Power BI Integration**
+
+- Connects to Azure PostgreSQL → DB civicpulsedb → view (`dwh.v_311_requests`) for real-time dashboards:
 - Build visuals (Import mode for speed, DirectQuery for freshness). -->
+        - Complaint volume by borough/type/agency
+        - SLA breach rate (% overdue)
+        - Resolution time trend
+        - Open vs closed requests
+
+### **Error Handling & Resilience**
+
+| Layer | Feature |
+|-------|----------|
+| **Airflow** | Retries, rate-limit control, watermark updates |
+| **ADF** | Sequential dependency (Copy → Script), logging |
+| **Postgres** | Deduplication via DISTINCT ON (unique_key) |
+| **Terraform** | Idempotent backend + state locking |
+
+## **Runbook**
+
+| Step | Description | Command |
+|------|--------------|----------|
+| 1 | Deploy infrastructure at project root | `./scripts/tf_run.sh` |
+| 2 | Initialize DB schemas at project root | `./scripts/db_init.sh` |
+| 3 | Trigger Airflow DAG | `airflow dags trigger nyc_311_to_blob_pq` |
+| 4 | Run ADF pipeline | (Parameter: ingest_date) |
+| 5 | Verify warehouse data | `SELECT COUNT(*) FROM dwh.fact_311_requests;` |
+| 6 | Refresh Power BI dashboard | Automatic / scheduled |
+
+## **Future Enhancements**
+
+- Add SLA alerting per borough in Power BI  
+- Integrate Airflow–ADF trigger handoff  
+- Extend to other civic datasets (Sanitation, Parks)  
+- Add observability with Azure Monitor  
+
+## **Acknowledgements**
+
+- NYC Open Data Portal (311 Service Requests)  
+- Astronomer.io (Airflow orchestration)  
+- Azure Cloud Engineering Team  
+- Terraform & PyArrow OSS Communities
