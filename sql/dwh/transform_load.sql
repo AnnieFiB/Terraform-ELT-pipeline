@@ -1,76 +1,125 @@
 -- =========================================
--- TRANSFORM & LOAD (no DDL)
---  - Flattens JSON arrays from stg.api_311_raw.payload
---  - Upserts into dwh.fact_311_requests
---  - Parameter p_since controls window (default 7 days)
+-- FUNCTION: dwh.run_311_transform
+-- Purpose : Merge stg.api_311_flat → dwh.fact_311_requests
 -- =========================================
 
--- Ensure required schemas/tables exist (light guard, no-op if already created)
-CREATE SCHEMA IF NOT EXISTS stg;
-CREATE SCHEMA IF NOT EXISTS dwh;
-
--- Transform function
-CREATE OR REPLACE FUNCTION dwh.run_311_transform(p_since interval DEFAULT interval '7 days')
+CREATE OR REPLACE FUNCTION dwh.run_311_transform(p_since interval DEFAULT interval '1 day')
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 BEGIN
+  /*
+    We pull only rows from staging (stg.api_311_flat)
+    loaded in roughly the last p_since (e.g. 1 day),
+    BUT we also deduplicate so we only keep the latest
+    version per unique_key by ingest_ts.
+  */
+
+  WITH latest_per_key AS (
+    SELECT DISTINCT ON (s.unique_key)
+      s.unique_key,
+      s.created_date,
+      s.due_date,
+      s.resolution_action_updated_date,
+      s.agency,
+      s.agency_name,
+      s.complaint_type,
+      s.descriptor,
+      s.status,
+      s.borough,
+      s.incident_zip,
+      s.incident_address,
+      s.street_name,
+      s.community_board,
+      s.latitude,
+      s.longitude,
+      s.resolution_description,
+      s.location_type,
+      s.facility_type,
+      s.open_data_channel_type,
+      s.bbl,
+      s.address_type,
+      s.park_facility_name,
+      s.park_borough,
+      s.cross_street_1,
+      s.cross_street_2,
+      s.intersection_street_1,
+      s.intersection_street_2,
+      s.src_file,
+      s.ingest_ts
+    FROM stg.api_311_flat s
+    WHERE s.ingest_ts >= now() - p_since
+    -- DISTINCT ON keeps the *first* row per unique_key according to ORDER BY.
+    -- We want the newest ingest_ts to win.
+    ORDER BY s.unique_key, s.ingest_ts DESC
+  )
+
   INSERT INTO dwh.fact_311_requests AS f (
     unique_key,
     created_date,
     due_date,
     resolution_action_updated_date,
-    agency, agency_name, complaint_type, descriptor, status,
-    borough, incident_zip, incident_address, street_name, community_board,
-    latitude, longitude,
-    resolution_description, location_type, facility_type, open_data_channel_type,
-    bbl, address_type, park_facility_name, park_borough,
-    cross_street_1, cross_street_2, intersection_street_1, intersection_street_2,
-    src_file, first_seen_ts, updated_ts
+    agency,
+    agency_name,
+    complaint_type,
+    descriptor,
+    status,
+    borough,
+    incident_zip,
+    incident_address,
+    street_name,
+    community_board,
+    latitude,
+    longitude,
+    resolution_description,
+    location_type,
+    facility_type,
+    open_data_channel_type,
+    bbl,
+    address_type,
+    park_facility_name,
+    park_borough,
+    cross_street_1,
+    cross_street_2,
+    intersection_street_1,
+    intersection_street_2,
+    src_file,
+    first_seen_ts,
+    updated_ts
   )
   SELECT
-    rec->>'unique_key'                                         AS unique_key,
-
-    NULLIF(rec->>'created_date','')::timestamptz               AS created_date,
-    NULLIF(rec->>'due_date','')::timestamptz                   AS due_date,
-    NULLIF(rec->>'resolution_action_updated_date','')::timestamptz AS resolution_action_updated_date,
-
-    rec->>'agency',
-    rec->>'agency_name',
-    rec->>'complaint_type',
-    rec->>'descriptor',
-    rec->>'status',
-
-    rec->>'borough',
-    rec->>'incident_zip',
-    rec->>'incident_address',
-    rec->>'street_name',
-    rec->>'community_board',
-
-    NULLIF(rec->>'latitude','')::double precision,
-    NULLIF(rec->>'longitude','')::double precision,
-
-    rec->>'resolution_description',
-    rec->>'location_type',
-    rec->>'facility_type',
-    rec->>'open_data_channel_type',
-
-    rec->>'bbl',
-    rec->>'address_type',
-    rec->>'park_facility_name',
-    rec->>'park_borough',
-    rec->>'cross_street_1',
-    rec->>'cross_street_2',
-    rec->>'intersection_street_1',
-    rec->>'intersection_street_2',
-
-    r.src_file,
+    lk.unique_key,
+    lk.created_date,
+    lk.due_date,
+    lk.resolution_action_updated_date,
+    lk.agency,
+    lk.agency_name,
+    lk.complaint_type,
+    lk.descriptor,
+    lk.status,
+    lk.borough,
+    lk.incident_zip,
+    lk.incident_address,
+    lk.street_name,
+    lk.community_board,
+    lk.latitude,
+    lk.longitude,
+    lk.resolution_description,
+    lk.location_type,
+    lk.facility_type,
+    lk.open_data_channel_type,
+    lk.bbl,
+    lk.address_type,
+    lk.park_facility_name,
+    lk.park_borough,
+    lk.cross_street_1,
+    lk.cross_street_2,
+    lk.intersection_street_1,
+    lk.intersection_street_2,
+    lk.src_file,
     now() AS first_seen_ts,
     now() AS updated_ts
-  FROM stg.api_311_raw r
-  CROSS JOIN LATERAL jsonb_array_elements(r.payload) rec
-  WHERE r.ingest_ts >= now() - p_since
-    AND rec ? 'unique_key'
+  FROM latest_per_key lk
   ON CONFLICT (unique_key) DO UPDATE
     SET
       created_date                   = EXCLUDED.created_date,
@@ -100,13 +149,12 @@ BEGIN
       cross_street_2                 = EXCLUDED.cross_street_2,
       intersection_street_1          = EXCLUDED.intersection_street_1,
       intersection_street_2          = EXCLUDED.intersection_street_2,
-      src_file                       = COALESCE(EXCLUDED.src_file, f.src_file),
+      src_file                       = EXCLUDED.src_file,
       updated_ts                     = now();
+
 END;
 $$;
 
--- Optional one-liner to run immediately for last 7 days:
--- SELECT dwh.run_311_transform();
 
--- Or run for a different window, e.g. 1 day:
+-- Optional: manual run
 -- SELECT dwh.run_311_transform(interval '1 day');
