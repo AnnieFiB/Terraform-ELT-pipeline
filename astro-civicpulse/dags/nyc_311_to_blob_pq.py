@@ -56,8 +56,8 @@ def get_blob_service_client():
 def nyc_311_to_blob():
     @task()
     def extract_and_load():
-        # Always fetch last 90 days
-        since = datetime.utcnow() - timedelta(days=90)
+        # Always fetch last 1 day
+        since = datetime.utcnow() - timedelta(days=1)
         where = f"created_date > '{since:%Y-%m-%dT%H:%M:%S}'"
         window_label = f"inc_since_{since:%Y%m%dT%H%M%S}"
         Variable.set("NYC311_MODE", "incremental")
