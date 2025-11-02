@@ -5,6 +5,7 @@ secrets.tf
 *.tfstate.backup
 *.exe
 .terraform/
+*.pbix
 
 terraform/.terraform/
 *.tfstate
