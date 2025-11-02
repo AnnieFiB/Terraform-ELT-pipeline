@@ -51,7 +51,7 @@ NYC 311 API  →  Airflow (Astronomer)  →  Azure Blob (Parquet)
 
 ### **Solution Architecture**
 
-![Data Pipeline Architecture](Terraform-ELT-pipeline\images\eltarchitecture.png)
+![Data Pipeline Architecture](./images/eltarchitecture.png)
 
 ```bash
 | Layer | Tool | Purpose |
@@ -321,7 +321,7 @@ PGUSER=pgadmin PGPASSWORD='***' ./scripts/db_apply.sh --transform
 ./scripts/db_apply.sh --transform # (stg to dwh)
 ```
 
-![db_Schema](Terraform-ELT-pipeline\images\dbschema.png)
+![db_Schema](./images/dbschema.png)
 
 ### **Airflow (Astronomer) DAG: nyc_311_to_blob.py**
 
@@ -383,7 +383,7 @@ astro dev run dags list
 
 ```
 
-![Airflow_ui](Terraform-ELT-pipeline\images\airflowui.png)
+![Airflow_ui](./images/airflowui.png)
 
 ### **ADF Pipeline Overview**
 
@@ -408,7 +408,7 @@ astro dev run dags list
   SELECT dwh.run_311_transform(interval '1 hour');
   ```
 
-![adf_pipeline](Terraform-ELT-pipeline\images\adf_pipeline.png)
+![ADF Pipeline](./images/adf_pipeline.png)
 
 ### **Power BI Integration**
 
